@@ -1,0 +1,7 @@
+saved_models/
+data/
+__pycache__/
+.vscode/
+.ipynb_checkpoints/
+troubleshoot.ipynb
+.DS_Store
