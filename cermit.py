@@ -1,9 +1,10 @@
 import pandas as pd
 import torch
 from torch import nn
+from nano_gpt import GPT
 
 MASK_TOKEN = "[MASK]"
-PAD_TOKEN = "PAD"
+PAD_TOKEN = "[PAD]"
 DEFAULT_DROPOUT_RATE = 0.2
 DEFAULT_MASKING_PERCENT = 0.15
 DEFAULT_TRAIN_SPLIT = 0.8
@@ -102,7 +103,7 @@ class DataGenerator:
         masked_padded = torch.empty(
             batch_size, MAX_MOLECULE_SIZE, device=self.device, dtype=torch.long
         )
-        padded_mask = torch.empty(
+        padded_mask = torch.zeros(
             batch_size, MAX_MOLECULE_SIZE, device=self.device, dtype=torch.bool
         )
 
@@ -124,7 +125,7 @@ class DataGenerator:
                 "constant",
                 self.pad_token_idx,
             )
-            padded_mask[idx][-right_pad:] = True
+            padded_mask[idx, -right_pad:] = True
 
         return original_padded, masked_padded, masked_idxs, padded_mask
 
@@ -143,37 +144,22 @@ class Cermit(nn.Module):
         super().__init__()
         self.device = device
         self.data_generator = data_generator
-        self.semantic_embedding_table = nn.Embedding(
-            self.data_generator.vocab_size, emb_size
-        )
-        self.positional_emb_table = nn.Embedding(MAX_MOLECULE_SIZE, emb_size)
-
-        # define a transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=emb_size,
-            nhead=n_heads,
-            dim_feedforward=emb_size * 4,
+        self.gpt = GPT(
+            num_blocks=num_blocks,
+            n_heads=n_heads,
+            emb_size=emb_size,
+            block_size=MAX_MOLECULE_SIZE,
+            data_generator=self.data_generator,
+            device=self.device,
             dropout=dropout,
-            activation=DEFAULT_ACTIVATION,
-            batch_first=True,
-            norm_first=True,
         )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=num_blocks
-        )
-
-        # Do a final Layer Norm
-        self.ln_f = nn.LayerNorm(emb_size)
-
-        # Pass into the linear layer to get probabilities
-        self.linear_layer = nn.Linear(emb_size, self.data_generator.vocab_size)
 
     def forward(
         self,
         masked: torch.tensor,
         src_key_padding_mask: torch.tensor,
-        original: None,
-        masked_idxs: None,
+        original=None,
+        masked_idxs=None,
     ) -> torch.tensor:
         """Forward function for cermit
 
@@ -185,12 +171,7 @@ class Cermit(nn.Module):
         Returns:
             torch.tensor: _description_
         """
-        sem_emb = self.semantic_embedding_table(masked)
-        pos_emb = self.positional_emb_table(torch.arange(0, MAX_MOLECULE_SIZE))
-        out = self.transformer_encoder(
-            src=sem_emb + pos_emb, src_key_padding_mask=src_key_padding_mask
-        )
-        logits = self.linear_layer(self.ln_f(out))
+        logits = self.gpt(masked, src_key_padding_mask)
         B, T, V = logits.shape
 
         loss = torch.zeros(1, device=self.device)
@@ -210,3 +191,31 @@ class Cermit(nn.Module):
             loss /= B
 
         return logits, loss
+
+    def train_model(
+        self,
+        batch_size: int,
+        num_epochs: int,
+        checkpoint_itvl=10,
+        lr=3e-4,
+        save_model=False,
+    ):
+        self.train()
+        opt = torch.optim.AdamW(self.parameters(), lr=lr)
+        for epoch in range(num_epochs):
+            (
+                original,
+                masked,
+                masked_idxs,
+                padded_mask,
+            ) = self.data_generator.generate_batch("train", batch_size)
+
+            # get logits and loss
+            _, loss = self(masked, padded_mask, original, masked_idxs)
+
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(self.parameters(), 5)
+            print(f"Epoch: {epoch}; Loss: {loss.item()}")
+            opt.step()
