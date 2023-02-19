@@ -12,7 +12,9 @@ DEFAULT_DROPOUT_RATE = 0.2
 DEFAULT_MASKING_PERCENT = 0.15
 DEFAULT_TRAIN_SPLIT = 0.8
 DEFAULT_ACTIVATION = "relu"
-MAX_PROTEIN_SEQ_LEN = 39000
+MAX_PROTEIN_SEQ_LEN = 2600
+MAX_PROTEIN_ANGLE = 1800
+MAX_PROTEIN_COORD = 10000
 TOTAL_STRUCTURAL_VARS = 54
 TOTAL_ANGLES = 12
 TOTAL_COORDINATES = 42
@@ -31,7 +33,7 @@ class DataGenerator:
         """
         self.device = device
         # Data loading
-        self.data = scn.load("debug", scn_dataset=True)
+        self.data = scn.load(casp_version=9, thinning=100, scn_dataset=True)
 
         # defining vocab
         with open("amino_acid_info.json", "r") as f:
@@ -49,11 +51,11 @@ class DataGenerator:
         self.mask_token_idx = self.char_to_ix[MASK_TOKEN]
         self.pad_token_idx = self.char_to_ix[PAD_TOKEN]
 
-        self.mask_angle_idx = 1801
-        self.pad_angle_idx = 1802
+        self.mask_angle_idx = MAX_PROTEIN_ANGLE
+        self.pad_angle_idx = MAX_PROTEIN_ANGLE + 1
 
-        self.mask_coords_idx = 10001
-        self.pad_coords_idx = 10002
+        self.mask_coords_idx = MAX_PROTEIN_COORD
+        self.pad_coords_idx = MAX_PROTEIN_COORD + 1
 
         # encode data into train & eval batches
         # self.aa_data, self.struct_data = self.encode(self.data)
@@ -111,6 +113,7 @@ class DataGenerator:
         masking_percent=DEFAULT_MASKING_PERCENT,
     ):
 
+        print("Started")
         # generate random indexes
         ixes = torch.randint(
             len(self.data),
@@ -119,7 +122,7 @@ class DataGenerator:
         )
 
         batch = [self.data[ix.item()] for ix in ixes]
-
+        print("Generated random batch with index")
         # generate amino acid sequence with its corresponding
         # structural information
         aa_data = []
@@ -143,13 +146,14 @@ class DataGenerator:
                     dtype=torch.long,
                 )
             )
+        print("Flattened all struct_info")
 
         # return aa_data, struct_data
         # mask masking_percent of original compound sequences
         aa_masked, struct_masked, masked_idxs = self.mask_sequences(
             aa_data[:], struct_data[:], masking_percent=masking_percent
         )
-
+        print("Masked")
         # return aa_data, struct_data, aa_masked, struct_masked, masked_idxs
 
         # pad sequences
@@ -220,7 +224,7 @@ class DataGenerator:
             )
 
             padded_mask[batch_idx, -right_pad:] = True
-
+        print("padded!")
         return (
             aa_original_padded,
             aa_masked_padded,

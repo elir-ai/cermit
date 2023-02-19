@@ -235,9 +235,13 @@ class GPT(nn.Module):
         )
         self.positional_emb_table = nn.Embedding(block_size, emb_size)
         # In a tenth of a degrees
-        self.angle_emb_table = nn.Embedding(1802, emb_size)
+        self.angle_emb_table = nn.Embedding(
+            self.data_generator.pad_angle_idx, emb_size
+        )
         # this is done in armstrong
-        self.coord_emb_table = nn.Embedding(10002, emb_size)
+        self.coord_emb_table = nn.Embedding(
+            self.data_generator.pad_coords_idx, emb_size
+        )
         self.attention_layers = nn.Sequential(
             *[
                 AttentionBlock(
