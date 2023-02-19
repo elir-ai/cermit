@@ -9,73 +9,6 @@ DEFAULT_DROPOUT_RATE = 0.4
 MODEL_NAME = "nanoGPT"
 
 
-class DataGenerator:
-    def __init__(self, file_path: str, device: str, train_split=0.8) -> None:
-        """Data Generator Class
-
-        Args:
-            file_path (str): File Path
-            device (str): Device to Initialize tensors on
-            train_split (float): Train vs Val Split
-        """
-        self.device = device
-        # Data loading
-        with open(file_path, "r") as f:
-            self.data = f.read()
-
-        # defining vocab
-        vocab = sorted(list(set(self.data)))
-        self.vocab_size = len(vocab)
-
-        # lookup dicts
-        self.ix_to_char = {i: ch for i, ch in enumerate(vocab)}
-        self.char_to_ix = {ch: i for i, ch in enumerate(vocab)}
-
-        # encode data into train & eval batches
-        self.data_encoded = self.encode(self.data)
-        split_idx = int(train_split * len(self.data_encoded))
-        self.train_data = self.data_encoded[:split_idx]
-        self.eval_data = self.data_encoded[split_idx:]
-
-    def encode(self, input_str: str) -> torch.tensor:
-        encoded = []
-        for ch in input_str:
-            encoded.append(self.char_to_ix[ch])
-        return torch.tensor(encoded, device=self.device)
-
-    def decode(self, input_ints: torch.tensor) -> str:
-        decoded = ""
-        for ix in input_ints:
-            decoded += self.ix_to_char[ix.item()]
-        return decoded
-
-    def generate_batch(self, split_type, batch_size, block_size):
-        if split_type == "train":
-            batch_to_generate_from = self.train_data
-        else:
-            batch_to_generate_from = self.eval_data
-
-        # generate random starting points
-        ixes = torch.randint(
-            0,
-            len(batch_to_generate_from) - block_size,
-            (batch_size,),
-            device=self.device,
-        )
-
-        # extend the generated starting points
-        X = torch.stack(
-            [batch_to_generate_from[ix : ix + block_size] for ix in ixes],
-        )  # B, T
-        Y = torch.stack(
-            [
-                batch_to_generate_from[ix + 1 : ix + block_size + 1]
-                for ix in ixes
-            ]
-        )  # B, T
-        return X, Y
-
-
 class FeedFowardLayer(nn.Module):
     def __init__(
         self, emb_size: int, dropout=DEFAULT_DROPOUT_RATE, scaling_factor=4
@@ -276,7 +209,7 @@ class GPT(nn.Module):
         n_heads: int,
         emb_size: int,
         block_size: int,
-        data_generator: DataGenerator,
+        data_generator,
         device: str,
         dropout=DEFAULT_DROPOUT_RATE,
     ) -> None:
@@ -301,6 +234,10 @@ class GPT(nn.Module):
             self.data_generator.vocab_size, emb_size
         )
         self.positional_emb_table = nn.Embedding(block_size, emb_size)
+        # In a tenth of a degrees
+        self.angle_emb_table = nn.Embedding(1802, emb_size)
+        # this is done in armstrong
+        self.coord_emb_table = nn.Embedding(10002, emb_size)
         self.attention_layers = nn.Sequential(
             *[
                 AttentionBlock(
@@ -317,15 +254,21 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(emb_size)
 
     def forward(
-        self, X: torch.tensor, padding_mask: torch.tensor
+        self,
+        aa_padded: torch.tensor,
+        struct_padded: torch.tensor,
+        padding_mask: torch.tensor,
     ) -> torch.tensor:
-        sem_emb = self.semantic_embedding_table(X)  # B, T, emb_size
+        sem_emb = self.semantic_embedding_table(aa_padded)  # B, T, emb_size
         # TODO: Check if position start from 0 or 1
         pos_emb = self.positional_emb_table(
-            torch.arange(X.shape[1], device=self.device)
+            torch.arange(aa_padded.shape[1], device=self.device)
         )  # T, emb_size
+        coord_emb = self.coord_emb_table(struct_padded[:, :, :42])
+        ang_emb = self.angle_emb_table(struct_padded[:, :, 42:])
+        comb_emb = sem_emb + pos_emb + coord_emb + ang_emb
         # _ => padding_mask returned by sequential
-        out, _ = self.attention_layers((sem_emb + pos_emb, padding_mask))
+        out, _ = self.attention_layers((comb_emb, padding_mask))
         out = self.ln_f(out)  # B, T, emb_size
         return self.linear_layer(out)  # B, T, vocab_size
 
@@ -360,43 +303,3 @@ class GPT(nn.Module):
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
         return idx
-
-
-if __name__ == "__main__":
-    dir_path = os.path.dirname(os.path.realpath(__file__))
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
-    print(f"Using Device: {device}")
-
-    # Hyper Params
-    emb_size = 256
-    block_size = 32
-    head_size = 128
-    batch_size = 512
-    dropout = 0.4
-    num_blocks = 6
-    n_heads = 4
-    n_epochs = 1000
-    checkpoint_itvl = 100
-
-    data_gen = DataGenerator(f"{dir_path}/shakespear.txt", device=device)
-    gpt = GPT(
-        num_blocks=num_blocks,
-        head_size=head_size,
-        n_heads=n_heads,
-        emb_size=emb_size,
-        block_size=block_size,
-        data_generator=data_gen,
-        device=device,
-        dropout=dropout,
-    )
-    gpt.to(device)
-    gpt.train(
-        batch_size=batch_size,
-        num_epochs=n_epochs,
-        checkpoint_itvl=checkpoint_itvl,
-    )

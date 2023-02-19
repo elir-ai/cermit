@@ -1,6 +1,9 @@
+import json
+import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+import sidechainnet as scn
 from nano_gpt import GPT
 
 MASK_TOKEN = "[MASK]"
@@ -9,11 +12,16 @@ DEFAULT_DROPOUT_RATE = 0.2
 DEFAULT_MASKING_PERCENT = 0.15
 DEFAULT_TRAIN_SPLIT = 0.8
 DEFAULT_ACTIVATION = "relu"
-MAX_MOLECULE_SIZE = 120
+MAX_PROTEIN_SEQ_LEN = 39000
+TOTAL_STRUCTURAL_VARS = 54
+TOTAL_ANGLES = 12
+TOTAL_COORDINATES = 42
+STRUCTURE_SCALING_FACTOR = 10
 
 
 class DataGenerator:
-    def __init__(self, file_path: str, device: str) -> None:
+    # TODO: Add train-test split here later
+    def __init__(self, device: str) -> None:
         """Data Generator Class
 
         Args:
@@ -23,17 +31,15 @@ class DataGenerator:
         """
         self.device = device
         # Data loading
-        with open(file_path, "r") as f:
-            self.data = pd.read_csv(
-                file_path, names=["unk", "smiles"], header=None
-            )["smiles"].values
+        self.data = scn.load("debug", scn_dataset=True)
 
         # defining vocab
-        unique_chars = []
-        for smile in self.data:
-            unique_chars += list(str(set(smile)))
+        with open("amino_acid_info.json", "r") as f:
+            self.aa_data = json.load(f)
 
-        vocab = [PAD_TOKEN, MASK_TOKEN] + list(set(unique_chars))
+        unique_aas = [i["code"] for i in self.aa_data.values()]
+        vocab = [PAD_TOKEN, MASK_TOKEN] + list(set(unique_aas))
+
         self.vocab_size = len(vocab)
 
         # lookup dicts
@@ -43,8 +49,15 @@ class DataGenerator:
         self.mask_token_idx = self.char_to_ix[MASK_TOKEN]
         self.pad_token_idx = self.char_to_ix[PAD_TOKEN]
 
+        self.mask_angle_idx = 1801
+        self.pad_angle_idx = 1802
+
+        self.mask_coords_idx = 10001
+        self.pad_coords_idx = 10002
+
         # encode data into train & eval batches
-        self.data_encoded = [self.encode(smi_str) for smi_str in self.data]
+        # self.aa_data, self.struct_data = self.encode(self.data)
+        # self.data_encoded = [self.encode(smi_str) for smi_str in self.data]
 
     def encode(self, smi_str: str) -> list:
         return torch.tensor([self.char_to_ix[char] for char in smi_str])
@@ -55,79 +68,166 @@ class DataGenerator:
             smi_string += self.ix_to_char[ix]
         return smi_string
 
-    def mask_sequences(self, sequences, masking_percent=0.15):
-        masked_idxs = []
-        masked = []
-        for seq in sequences:
-            masked_seq = seq.clone().detach()
-            n_masks = int(masking_percent * len(seq))
-            masked_idx = torch.randint(len(seq), (n_masks,))
+    def mask_sequences(
+        self,
+        aa_data,
+        struct_data,
+        masking_percent=0.15,
+        mask_struct=True,
+    ):
+        all_masked_idxs = []
+        all_aa_masked = []
+        all_struct_masked = []
 
-            for idx in masked_idx:
-                masked_seq[idx] = self.mask_token_idx
+        for seq_idx in range(len(aa_data)):
+            aa_masked = aa_data[seq_idx].detach().clone()
+            struct_masked = struct_data[seq_idx].detach().clone()
 
-            masked.append(masked_seq)
-            masked_idxs.append(masked_idx)
-        return sequences, masked, masked_idxs
+            # how many masks per sequence
+            n_residue = len(aa_masked)
+            n_masks = int(masking_percent * n_residue)
+            masked_idxs = torch.randint(n_residue, (n_masks,))
+
+            for mask_idx in masked_idxs:
+                aa_masked[mask_idx] = self.mask_token_idx
+
+                if mask_struct:
+                    struct_masked[mask_idx][
+                        :TOTAL_COORDINATES
+                    ] = self.mask_coords_idx
+                    struct_masked[mask_idx][
+                        TOTAL_COORDINATES:
+                    ] = self.mask_angle_idx
+
+            all_masked_idxs.append(masked_idxs)
+            all_aa_masked.append(aa_masked)
+            all_struct_masked.append(struct_masked)
+
+        return all_aa_masked, all_struct_masked, all_masked_idxs
 
     def generate_batch(
         self,
-        split_type,
         batch_size,
-        train_split=DEFAULT_TRAIN_SPLIT,
         masking_percent=DEFAULT_MASKING_PERCENT,
     ):
-        split_idx = int(train_split * len(self.data_encoded))
-        if split_type == "train":
-            batch_to_generate_from = self.data_encoded[:split_idx]
-        else:
-            batch_to_generate_from = self.data_encoded[split_idx:]
 
         # generate random indexes
         ixes = torch.randint(
-            len(batch_to_generate_from),
+            len(self.data),
             (batch_size,),
             device=self.device,
         )
 
-        original = [batch_to_generate_from[ix] for ix in ixes]
+        batch = [self.data[ix.item()] for ix in ixes]
 
+        # generate amino acid sequence with its corresponding
+        # structural information
+        aa_data = []
+        struct_data = []
+        for seq in batch:
+            aa_data.append(
+                torch.tensor(
+                    [self.char_to_ix[i] for i in seq.seq],
+                    device=self.device,
+                    dtype=torch.long,
+                )
+            )
+            # flatten out the xyz for all 14 co-ordinates to a TOTAL_COORDINATES len feat vector per residue
+            coords = seq.coords.reshape(-1, 14 * 3)
+            angles = seq.angles
+            struct_data.append(
+                torch.tensor(
+                    np.concatenate([coords, angles], axis=1)
+                    * STRUCTURE_SCALING_FACTOR,
+                    device=self.device,
+                    dtype=torch.long,
+                )
+            )
+
+        # return aa_data, struct_data
         # mask masking_percent of original compound sequences
-        original, masked, masked_idxs = self.mask_sequences(
-            original, masking_percent=masking_percent
+        aa_masked, struct_masked, masked_idxs = self.mask_sequences(
+            aa_data[:], struct_data[:], masking_percent=masking_percent
         )
 
-        original_padded = torch.empty(
-            batch_size, MAX_MOLECULE_SIZE, device=self.device, dtype=torch.long
+        # return aa_data, struct_data, aa_masked, struct_masked, masked_idxs
+
+        # pad sequences
+        aa_original_padded = torch.empty(
+            batch_size,
+            MAX_PROTEIN_SEQ_LEN,
+            device=self.device,
+            dtype=torch.long,
         )
-        masked_padded = torch.empty(
-            batch_size, MAX_MOLECULE_SIZE, device=self.device, dtype=torch.long
+        aa_masked_padded = torch.empty(
+            batch_size,
+            MAX_PROTEIN_SEQ_LEN,
+            device=self.device,
+            dtype=torch.long,
+        )
+        struct_masked_padded = torch.empty(
+            batch_size,
+            MAX_PROTEIN_SEQ_LEN,
+            54,
+            device=self.device,
+            dtype=torch.long,
         )
         padded_mask = torch.zeros(
-            batch_size, MAX_MOLECULE_SIZE, device=self.device, dtype=torch.bool
+            batch_size,
+            MAX_PROTEIN_SEQ_LEN,
+            device=self.device,
+            dtype=torch.bool,
         )
 
-        for idx in range(batch_size):
-            right_pad = MAX_MOLECULE_SIZE - len(original[idx])
+        for batch_idx in range(batch_size):
+            right_pad = MAX_PROTEIN_SEQ_LEN - len(aa_data[batch_idx])
 
-            # pad original sequence
-            original_padded[idx] = nn.functional.pad(
-                original[idx],
+            # pad original aa sequence
+            aa_original_padded[batch_idx] = nn.functional.pad(
+                aa_data[batch_idx],
                 [0, right_pad],
                 "constant",
                 self.pad_token_idx,
             )
 
-            # pad masked sequence
-            masked_padded[idx] = nn.functional.pad(
-                masked[idx],
+            # pad masked aa sequence
+            aa_masked_padded[batch_idx] = nn.functional.pad(
+                aa_masked[batch_idx],
                 [0, right_pad],
                 "constant",
                 self.pad_token_idx,
             )
-            padded_mask[idx, -right_pad:] = True
 
-        return original_padded, masked_padded, masked_idxs, padded_mask
+            # pad masked coords sequence
+            coord_pad = nn.functional.pad(
+                struct_masked[batch_idx][:, :TOTAL_COORDINATES],
+                [0, 0, 0, right_pad],
+                "constant",
+                self.pad_coords_idx,
+            )
+
+            # pad masked angle sequence
+            angle_pad = nn.functional.pad(
+                struct_masked[batch_idx][:, TOTAL_COORDINATES:],
+                [0, 0, 0, right_pad],
+                "constant",
+                self.pad_angle_idx,
+            )
+
+            # concat both and update struct_masked_padded
+            struct_masked_padded[batch_idx] = torch.concat(
+                [coord_pad, angle_pad], dim=-1
+            )
+
+            padded_mask[batch_idx, -right_pad:] = True
+
+        return (
+            aa_original_padded,
+            aa_masked_padded,
+            struct_masked_padded,
+            masked_idxs,
+            padded_mask,
+        )
 
 
 class Cermit(nn.Module):
@@ -148,7 +248,7 @@ class Cermit(nn.Module):
             num_blocks=num_blocks,
             n_heads=n_heads,
             emb_size=emb_size,
-            block_size=MAX_MOLECULE_SIZE,
+            block_size=MAX_PROTEIN_SEQ_LEN,
             data_generator=self.data_generator,
             device=self.device,
             dropout=dropout,
@@ -156,9 +256,10 @@ class Cermit(nn.Module):
 
     def forward(
         self,
-        masked: torch.tensor,
+        aa_masked: torch.tensor,
+        struct_masked: torch.tensor,
         src_key_padding_mask: torch.tensor,
-        original=None,
+        aa_original=None,
         masked_idxs=None,
     ) -> torch.tensor:
         """Forward function for cermit
