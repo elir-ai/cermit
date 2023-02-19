@@ -5,3 +5,4 @@ __pycache__/
 .ipynb_checkpoints/
 troubleshoot.ipynb
 .DS_Store
+sidechainnet_data/
