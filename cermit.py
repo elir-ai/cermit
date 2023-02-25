@@ -5,6 +5,7 @@ import torch
 from torch import nn
 import sidechainnet as scn
 from nano_gpt import GPT
+from nano_gpt import MAX_PROTEIN_SEQ_LEN
 
 MASK_TOKEN = "[MASK]"
 PAD_TOKEN = "[PAD]"
@@ -12,13 +13,14 @@ DEFAULT_DROPOUT_RATE = 0.2
 DEFAULT_MASKING_PERCENT = 0.15
 DEFAULT_TRAIN_SPLIT = 0.8
 DEFAULT_ACTIVATION = "relu"
-MAX_PROTEIN_SEQ_LEN = 2600
+# MAX_PROTEIN_SEQ_LEN = 2600
 MAX_PROTEIN_ANGLE = 1800
 MAX_PROTEIN_COORD = 10000
 TOTAL_STRUCTURAL_VARS = 54
 TOTAL_ANGLES = 12
 TOTAL_COORDINATES = 42
 STRUCTURE_SCALING_FACTOR = 10
+DEBUG = True
 
 
 class DataGenerator:
@@ -33,7 +35,12 @@ class DataGenerator:
         """
         self.device = device
         # Data loading
-        self.data = scn.load(casp_version=9, thinning=100, scn_dataset=True)
+        if DEBUG:
+            self.data = scn.load("debug", scn_dataset=True)
+        else:
+            self.data = scn.load(
+                casp_version=9, thinning=100, scn_dataset=True
+            )
 
         # defining vocab
         with open("amino_acid_info.json", "r") as f:
