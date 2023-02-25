@@ -7,6 +7,7 @@ from torch.nn import functional as F
 
 DEFAULT_DROPOUT_RATE = 0.4
 MODEL_NAME = "nanoGPT"
+MAX_PROTEIN_SEQ_LEN = 2600
 
 
 class FeedFowardLayer(nn.Module):
@@ -233,14 +234,16 @@ class GPT(nn.Module):
         self.semantic_embedding_table = nn.Embedding(
             self.data_generator.vocab_size, emb_size
         )
-        self.positional_emb_table = nn.Embedding(block_size, emb_size)
+        # TODO: Use MAX_PROTEIN_LENGTH
+        self.positional_emb_table = nn.Embedding(2600, emb_size)
         # In a tenth of a degrees
         self.angle_emb_table = nn.Embedding(
             self.data_generator.pad_angle_idx, emb_size
         )
         # this is done in armstrong
         self.coord_emb_table = nn.Embedding(
-            self.data_generator.pad_coords_idx, emb_size
+            self.data_generator.pad_coords_idx,
+            emb_size,
         )
         self.attention_layers = nn.Sequential(
             *[
