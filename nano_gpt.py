@@ -1,13 +1,13 @@
 # Karpathy = Chad
 import os
+from abc import ABCMeta
+from abc import abstractmethod
 
 import torch
 from torch import nn
-from torch.nn import functional as F
 
 DEFAULT_DROPOUT_RATE = 0.4
 MODEL_NAME = "nanoGPT"
-MAX_PROTEIN_SEQ_LEN = 2600
 
 
 class FeedFowardLayer(nn.Module):
@@ -203,7 +203,13 @@ class AttentionBlock(nn.Module):
         return (X, padding_mask)
 
 
-class GPT(nn.Module):
+class GPT(nn.Module, metaclass=ABCMeta):
+    def __new__(cls, *args, **kwargs):
+        if cls is GPT:
+            raise TypeError(f"Can't instantiate abstract class {cls.__name__}")
+        return object.__new__(cls)
+
+    @abstractmethod
     def __init__(
         self,
         num_blocks: int,
@@ -211,7 +217,6 @@ class GPT(nn.Module):
         emb_size: int,
         block_size: int,
         data_generator,
-        device: str,
         dropout=DEFAULT_DROPOUT_RATE,
     ) -> None:
         """GPT Module
@@ -228,14 +233,14 @@ class GPT(nn.Module):
             dropout (int, optional): Dropout Rate. Defaults to DEFAULT_DROPOUT_RATE.
         """
         super().__init__()
-        self.device = device
         self.block_size = block_size
         self.data_generator = data_generator
+        self.device = self.data_generator.device
         self.semantic_embedding_table = nn.Embedding(
             self.data_generator.vocab_size, emb_size
         )
         # TODO: Use MAX_PROTEIN_LENGTH
-        self.positional_emb_table = nn.Embedding(2600, emb_size)
+        self.positional_emb_table = nn.Embedding(self.block_size, emb_size)
         # In a tenth of a degrees
         self.angle_emb_table = nn.Embedding(
             self.data_generator.pad_angle_idx, emb_size
@@ -293,20 +298,17 @@ class GPT(nn.Module):
         except Exception as err:
             print(err)
 
-    def generate(self, idx, max_new_tokens):
-        # idx is (B, T) array of indices in the current context
-        for _ in range(max_new_tokens):
-            # crop idx to the last block_size tokens
-            idx_cond = idx[:, -self.block_size :]
-            # get the predictions
-            logits = self(idx_cond)
-            # focus only on the last time step
-            logits = logits[:, -1, :]  # becomes (B, C)
-            # apply softmax to get probabilities
-            probs = logits.softmax(dim=-1)  # (B, C)
-            # probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
-            # append sampled index to the running sequence
-            idx = torch.cat((idx, idx_next), dim=1)  # (B, T+1)
-        return idx
+    def save_model(self, model_path: str) -> None:
+        """Save Model
+
+        Args:
+            model_path (str): Save Model
+        """
+        try:
+            with open(model_path, "w") as fp:
+                torch.save(self.state_dict(), fp)
+
+            print("Model saved successfully!")
+
+        except Exception as err:
+            print(err)
