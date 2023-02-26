@@ -1,0 +1,4 @@
+numpy==1.23.5
+pandas==1.5.3
+pytorch>=1.13.1
+sidechainnet==0.7.6
