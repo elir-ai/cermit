@@ -45,7 +45,7 @@ class DataLoader:
         """
         self.device = device
         # Data loading
-        scn_dir = BASE_DIR + "/sidehainnet_data"
+        scn_dir = BASE_DIR + "/sidechainnet_data"
         if casp_version:
             self.data = scn.load(
                 casp_version=casp_version, thinning=thinning, scn_dataset=True, scn_dir=scn_dir
