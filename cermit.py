@@ -1,7 +1,11 @@
+import os
+import shutil
 import json
 import math
+from datetime import datetime
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 import torch
 from torch import nn
 import sidechainnet as scn
@@ -14,7 +18,7 @@ DEFAULT_MASKING_PERCENT = 0.15
 DEFAULT_TRAIN_SPLIT = 0.8
 DEFAULT_ACTIVATION = "relu"
 MAX_PROTEIN_SEQ_LEN = 2600
-MAX_PROTEIN_ANGLE = 1800
+MAX_PROTEIN_ANGLE = 3600
 MAX_PROTEIN_COORD = 10000
 TOTAL_STRUCTURAL_VARS = 54
 TOTAL_ANGLES = 12
@@ -64,15 +68,8 @@ class DataLoader:
         self.mask_seq_idx = self.char_to_ix[MASK_TOKEN]
         self.pad_seq_idx = self.char_to_ix[PAD_TOKEN]
 
-        self.mask_angle_idx = MAX_PROTEIN_ANGLE
-        self.pad_angle_idx = MAX_PROTEIN_ANGLE + 1
-
-        self.mask_coords_idx = MAX_PROTEIN_COORD
-        self.pad_coords_idx = MAX_PROTEIN_COORD + 1
-
-        # encode data into train & eval batches
-        # self.aa_data, self.struct_data = self.encode(self.data)
-        # self.data_encoded = [self.encode(smi_str) for smi_str in self.data]
+        self.pad_angle_idx = MAX_PROTEIN_ANGLE
+        self.mask_angle_idx = MAX_PROTEIN_ANGLE + 1
 
     def encode(self, smi_str: str) -> list:
         return torch.tensor([self.char_to_ix[char] for char in smi_str])
@@ -113,17 +110,15 @@ class DataLoader:
         Returns:
             torch.tensor: pairwise distance
         """
-        c_alpha_coords = coords[1::14]
-        seq_len = c_alpha_coords.shape[0]
-        pairwise_dist = torch.zeros(
+        c_alpha_coords = torch.tensor(coords[1::14], device=self.device, dtype=torch.float32)
+        diff = c_alpha_coords[:, None, :] - c_alpha_coords[None, :, :]
+        pairwise_dist = torch.sqrt(torch.sum(diff**2, axis=-1))
+        pairwise_dist_padded = torch.empty(
             MAX_PROTEIN_SEQ_LEN, MAX_PROTEIN_SEQ_LEN, device=self.device
         )
-        for i in range(seq_len):
-            for j in range(seq_len):
-                pairwise_dist[i][j] = np.linalg.norm(
-                    c_alpha_coords[i] - c_alpha_coords[j]
-                )
-        return pairwise_dist
+        seq_len = len(pairwise_dist)
+        pairwise_dist_padded[:seq_len, :seq_len] = pairwise_dist
+        return pairwise_dist_padded
 
     def mask_and_pad_sequences(
         self,
@@ -153,6 +148,12 @@ class DataLoader:
             self.pad_angle_idx,
             device=self.device,
         )
+        batch_data["padding_mask"] = torch.zeros(
+            batch_size,
+            MAX_PROTEIN_SEQ_LEN,
+            device=self.device,
+            dtype=torch.bool,
+        )
 
         for seq_idx in range(batch_size):
             seq = batch_data["seq_data"][seq_idx].detach().clone()
@@ -161,7 +162,7 @@ class DataLoader:
             # how many masks per sequence
             n_residue = len(seq)
             n_masks = int(masking_percent * n_residue)
-            masked_idxs = torch.randint(n_residue, (n_masks,))
+            masked_idxs = torch.randint(n_residue, (n_masks,), device=self.device)
 
             for mask_idx in masked_idxs:
                 seq[mask_idx] = self.mask_seq_idx
@@ -187,8 +188,9 @@ class DataLoader:
                 "constant",
                 self.pad_angle_idx,
             )
+            batch_data["padding_mask"][seq_idx, -to_pad:] = True
 
-        # Concat original data list into a single tensor
+        # Stack original data list into a single tensor
         for key in ["seq_data", "angle_data", "pairwise_dist"]:
             batch_data[key] = torch.stack(batch_data[key])
 
@@ -200,11 +202,8 @@ class DataLoader:
         masking_percent=DEFAULT_MASKING_PERCENT,
     ) -> GeneratorExit:
 
-        print("Starting Generator")
-        total_batches = int(len(self.data) / batch_size)
-
+        total_batches = len(self.data) // batch_size
         for curr_batch in range(total_batches):
-            print(f"Starting Batch: {curr_batch}")
             batch_items = self.data[curr_batch : curr_batch + batch_size]
 
             # Store all info in the batch_data dict
@@ -231,9 +230,7 @@ class DataLoader:
                     self.generate_pairwise_distance(seq.coords)
                 )
 
-            # yield batch_data
             # mask masking_percent of original compound sequences
-            print("Masking...")
             batch_data_processed = self.mask_and_pad_sequences(
                 batch_data, masking_percent=masking_percent
             )
@@ -246,53 +243,83 @@ class Cermit(GPT):
         num_blocks: int,
         n_heads: int,
         emb_size: int,
-        data_generator: DataLoader,
+        data_loader: DataLoader,
         dropout=DEFAULT_DROPOUT_RATE,
+        model_name="cermit",
     ) -> None:
+        """Cermit Class inherits base GPT class
+
+        Args:
+            num_blocks (int): Num Attention blocks
+            n_heads (int): Num attention heads in MHA
+            emb_size (int): Emb Size of every token. Head size = Emb size // n_heads
+            data_loader (DataLoader): Data Loader class
+            dropout (float, optional): Dropout. Defaults to DEFAULT_DROPOUT_RATE.
+        """
+        self.model_name = model_name
+        self.data_loader = data_loader
+
+        # Save model params
+        self.model_params = {
+            "n_heads": n_heads,
+            "emb_size": emb_size,
+            "num_blocks": num_blocks,
+            "dropout": dropout,
+            "data_len": len(self.data_loader.data),
+        }
 
         super().__init__(
             num_blocks=num_blocks,
             n_heads=n_heads,
             emb_size=emb_size,
             block_size=MAX_PROTEIN_SEQ_LEN,
-            data_generator=data_generator,
+            vocab_size=self.data_loader.vocab_size,
             dropout=dropout,
         )
+        # In a tenth of a degrees
+        self.angle_emb_table = nn.Embedding(
+            self.data_loader.mask_angle_idx + 1, emb_size
+        )
 
-    def forward(
-        self,
-        aa_masked: torch.tensor,
-        struct_masked: torch.tensor,
-        src_key_padding_mask: torch.tensor,
-        aa_original=None,
-        masked_idxs=None,
-    ) -> torch.tensor:
+    def forward(self, x: dict, calc_loss=True) -> torch.tensor:
         """Forward function for cermit
 
         Args:
-            #TODO: Update args
-            masked_X (torch.tensor): Masked indices of compound in batches.
-                Size: batch_size * MAX_MOLECULE_LENGTH
+            x (dict): As returned by DataLoader.generate_batch
+            calc_loss (bool): Should you calc loss
 
         Returns:
-            torch.tensor: _description_
+            (None | torch.tensor): Loss if original values are given.
         """
-        logits = self.gpt(masked, src_key_padding_mask)
-        B, T, V = logits.shape
+        # Embed AA sequence and angles.
+        # B, T, emb_size
+        seq_embedded = self.semantic_embedding_table(x["seq_masked"])
 
-        loss = torch.zeros(1, device=self.device)
+        angles_embedded = self.angle_emb_table(x["angles_masked"]).sum(
+            -2
+        )  # Sum embeddings for all angles
+
+        out, _ = self.attention_layers(
+            (seq_embedded + angles_embedded, x["padding_mask"])
+        )
+        out = self.ln_f(out)  # B, T, emb_size
+        logits = self.linear_layer(out)  # B, T, vocab_size
+
+        B = logits.shape[0]
+
+        loss = torch.zeros(1, device=self.data_loader.device)
 
         # calculate loss
-        if original is not None and masked_idxs is not None:
+        if calc_loss:
             loss_func = nn.CrossEntropyLoss()
             for batch_idx in range(B):
                 # get masked index of tokens for the particular batch
-                masked_idx = masked_idxs[batch_idx]
+                masked_idx = x["masked_idxs"][batch_idx]
 
                 # output for that batch_index
                 loss += loss_func(
                     logits[batch_idx, masked_idx],
-                    original[batch_idx, masked_idx],
+                    x["seq_data"][batch_idx, masked_idx],
                 )
             loss /= B
 
@@ -306,22 +333,99 @@ class Cermit(GPT):
         lr=3e-4,
         save_model=False,
     ):
+        if save_model:
+            self.config_model_dir()
+
         self.train()
         opt = torch.optim.AdamW(self.parameters(), lr=lr)
+
         for epoch in range(num_epochs):
-            (
-                original,
-                masked,
-                masked_idxs,
-                padded_mask,
-            ) = self.data_generator.generate_batch("train", batch_size)
+            batch_step = 0
+            total_batches = len(self.data_loader.data) // batch_size
+            data_generator = self.data_loader.generate_batch(
+                batch_size=batch_size
+            )
+            with tqdm(
+                data_generator,
+                total=total_batches,
+                unit=" batch",
+            ) as tepoch:
+                for batch_data in tepoch:
+                    tepoch.set_description(f"Epoch {epoch}")
 
-            # get logits and loss
-            _, loss = self(masked, padded_mask, original, masked_idxs)
+                    batch_step += 1
+                    # get logits and loss
+                    _, loss = self(batch_data)
 
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
+                    opt.zero_grad(set_to_none=True)
+                    loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(self.parameters(), 5)
-            print(f"Epoch: {epoch}; Loss: {loss.item()}")
-            opt.step()
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), 5)
+
+                    opt.step()
+                    tepoch.set_postfix(loss=loss.item(), val_loss=0)
+
+            # Save model
+            if save_model:
+                if epoch % checkpoint_itvl == 0:
+                    self.save_model(epoch=epoch)
+
+    def config_model_dir(
+        self,
+    ) -> None:
+        """Config model dir. To be run once per train
+
+        Args:
+            model_name (str): Model Name. Defaults to "cermit".
+        """
+        if self.model_name == "cermit":
+            curr_time = datetime.now().strftime("%m_%d_%Y_T_%H_%M_%S")
+            self.model_name += f"_{curr_time}"
+
+        self.model_dir = f"saved_models/{self.model_name}"
+
+        if os.path.isdir(self.model_dir):
+            # to clear the existing
+            shutil.rmtree(self.model_dir)
+
+        os.makedirs(self.model_dir)
+
+    def save_model(self, epoch: int) -> None:
+        """Save Model
+
+        Args:
+            model_path (str): Save Model
+        """
+        checkpoint = {"epoch": epoch}
+        try:
+            
+            # Save all info required
+            for key, val in self.model_params.items():
+                checkpoint[key] = val
+
+            checkpoint["state_dict"] = self.state_dict()
+            torch.save(
+                checkpoint,
+                f"{self.model_dir}/{self.model_name}_epoch_{epoch}.pth",
+            )
+
+            print("Model saved successfully!")
+
+        except Exception as err:
+            print(err)
+
+    def load_model(self, model_path: str) -> None:
+        """Load saved model
+
+        Args:
+            model_path (str): Model path
+        """
+        try:
+            self.load_state_dict(
+                torch.load(model_path, map_location=self.device)["state_dict"]
+            )
+            print("Model loaded successfully!")
+        except Exception as err:
+            print(err)
+
+    

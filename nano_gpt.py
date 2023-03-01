@@ -216,7 +216,7 @@ class GPT(nn.Module, metaclass=ABCMeta):
         n_heads: int,
         emb_size: int,
         block_size: int,
-        data_generator,
+        vocab_size: int,
         dropout=DEFAULT_DROPOUT_RATE,
     ) -> None:
         """GPT Module
@@ -234,22 +234,8 @@ class GPT(nn.Module, metaclass=ABCMeta):
         """
         super().__init__()
         self.block_size = block_size
-        self.data_generator = data_generator
-        self.device = self.data_generator.device
-        self.semantic_embedding_table = nn.Embedding(
-            self.data_generator.vocab_size, emb_size
-        )
-        # TODO: Use MAX_PROTEIN_LENGTH
+        self.semantic_embedding_table = nn.Embedding(vocab_size, emb_size)
         self.positional_emb_table = nn.Embedding(self.block_size, emb_size)
-        # In a tenth of a degrees
-        self.angle_emb_table = nn.Embedding(
-            self.data_generator.pad_angle_idx, emb_size
-        )
-        # this is done in armstrong
-        self.coord_emb_table = nn.Embedding(
-            self.data_generator.pad_coords_idx,
-            emb_size,
-        )
         self.attention_layers = nn.Sequential(
             *[
                 AttentionBlock(
@@ -261,8 +247,7 @@ class GPT(nn.Module, metaclass=ABCMeta):
                 for _ in range(num_blocks)
             ]
         )
-        self.linear_layer = nn.Linear(emb_size, self.data_generator.vocab_size)
-        # final layer norm
+        self.linear_layer = nn.Linear(emb_size, vocab_size)
         self.ln_f = nn.LayerNorm(emb_size)
 
     def forward(
@@ -283,32 +268,3 @@ class GPT(nn.Module, metaclass=ABCMeta):
         out, _ = self.attention_layers((comb_emb, padding_mask))
         out = self.ln_f(out)  # B, T, emb_size
         return self.linear_layer(out)  # B, T, vocab_size
-
-    def load_model(self, model_path: str) -> None:
-        """Load saved model
-
-        Args:
-            model_path (str): Model path
-        """
-        try:
-            self.load_state_dict(
-                torch.load(model_path, map_location=self.device)
-            )
-            print("Saved model loaded successfully!")
-        except Exception as err:
-            print(err)
-
-    def save_model(self, model_path: str) -> None:
-        """Save Model
-
-        Args:
-            model_path (str): Save Model
-        """
-        try:
-            with open(model_path, "w") as fp:
-                torch.save(self.state_dict(), fp)
-
-            print("Model saved successfully!")
-
-        except Exception as err:
-            print(err)
