@@ -26,7 +26,7 @@ TOTAL_COORDINATES = 42
 ANGLE_SCALE_FACTOR = 10
 DEFAULT_THINNING = 100
 DEFAULT_DEVICE = "cpu"
-
+BASE_DIR = os.path.dirname(__file__)
 
 class DataLoader:
     # TODO: Add train-test split here later
@@ -45,12 +45,13 @@ class DataLoader:
         """
         self.device = device
         # Data loading
+        scn_dir = BASE_DIR + "/sidehainnet_data"
         if casp_version:
             self.data = scn.load(
-                casp_version=casp_version, thinning=thinning, scn_dataset=True
+                casp_version=casp_version, thinning=thinning, scn_dataset=True, scn_dir=scn_dir
             )
         else:
-            self.data = scn.load("debug", scn_dataset=True)
+            self.data = scn.load("debug", scn_dataset=True, scn_dir=scn_dir)
 
         # defining vocab
         with open("amino_acid_info.json", "r") as f:
