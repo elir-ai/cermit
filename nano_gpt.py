@@ -27,7 +27,7 @@ class FeedFowardLayer(nn.Module):
         self.emb_size = emb_size
         self.feed_foward = nn.Sequential(
             nn.Linear(self.emb_size, self.emb_size * scaling_factor),
-            nn.ReLU(),
+            nn.GeLU(),
             nn.Linear(self.emb_size * scaling_factor, self.emb_size),
             nn.Dropout(dropout),
         )
@@ -71,7 +71,10 @@ class ScaledAttention(nn.Module):
         self.l_value = nn.Linear(emb_size, head_size, bias=False)
 
         self.register_buffer(
-            "tril", torch.tril(torch.ones(block_size, block_size))
+            "tril",
+            torch.tril(
+                torch.ones(block_size, block_size, dtype=torch.float32)
+            ),
         )
         self.dropout = nn.Dropout(dropout)
 
@@ -234,8 +237,12 @@ class GPT(nn.Module, metaclass=ABCMeta):
         """
         super().__init__()
         self.block_size = block_size
-        self.semantic_embedding_table = nn.Embedding(vocab_size, emb_size)
-        self.positional_emb_table = nn.Embedding(self.block_size, emb_size)
+        self.semantic_embedding_table = nn.Embedding(
+            vocab_size, emb_size, dtype=torch.float32
+        )
+        self.positional_emb_table = nn.Embedding(
+            self.block_size, emb_size, dtype=torch.float32
+        )
         self.attention_layers = nn.Sequential(
             *[
                 AttentionBlock(

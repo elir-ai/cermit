@@ -76,7 +76,7 @@ class DataLoader:
         self.data = [prot for prot in self.data if len(prot) <= MAX_PROTEIN_SEQ_LEN]
 
     def encode(self, smi_str: str) -> list:
-        return torch.tensor([self.char_to_ix[char] for char in smi_str])
+        return torch.tensor([self.char_to_ix[char] for char in smi_str], dtype=torch.float32)
 
     def decode(self, list_ix):
         smi_string = ""
@@ -100,7 +100,7 @@ class DataLoader:
         angles_fixed = torch.tensor(
             angles_in_degrees * ANGLE_SCALE_FACTOR,
             device=self.device,
-            dtype=torch.long,
+            dtype=torch.int,
         )
         return angles_fixed
 
@@ -114,11 +114,11 @@ class DataLoader:
         Returns:
             torch.tensor: pairwise distance
         """
-        c_alpha_coords = torch.tensor(coords[1::14], device=self.device, dtype=torch.float32)
+        c_alpha_coords = torch.tensor(coords[1::14], device=self.device, dtype=torch.float16)
         diff = c_alpha_coords[:, None, :] - c_alpha_coords[None, :, :]
         pairwise_dist = torch.sqrt(torch.sum(diff**2, axis=-1))
         pairwise_dist_padded = torch.empty(
-            MAX_PROTEIN_SEQ_LEN, MAX_PROTEIN_SEQ_LEN, device=self.device
+            MAX_PROTEIN_SEQ_LEN, MAX_PROTEIN_SEQ_LEN, device=self.device, dtype=torch.float32
         )
         seq_len = len(pairwise_dist)
         pairwise_dist_padded[:seq_len, :seq_len] = pairwise_dist
@@ -166,7 +166,8 @@ class DataLoader:
             # how many masks per sequence
             n_residue = len(seq)
             n_masks = int(masking_percent * n_residue)
-            masked_idxs = torch.randint(n_residue, (n_masks,), device=self.device)
+            # randperm is used to ensure unique indexes for masks are produced :)
+            masked_idxs = torch.randperm(n_residue, device=self.device)[:n_masks]
 
             for mask_idx in masked_idxs:
                 seq[mask_idx] = self.mask_seq_idx
@@ -224,7 +225,7 @@ class DataLoader:
                     torch.tensor(
                         [self.char_to_ix[i] for i in seq.seq],
                         device=self.device,
-                        dtype=torch.long,
+                        dtype=torch.int,
                     )
                 )
                 # take the backbone torsion and bond angles (first 6 angles)
