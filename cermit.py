@@ -17,7 +17,7 @@ DEFAULT_DROPOUT_RATE = 0.2
 DEFAULT_MASKING_PERCENT = 0.15
 DEFAULT_TRAIN_SPLIT = 0.8
 DEFAULT_ACTIVATION = "relu"
-MAX_PROTEIN_SEQ_LEN = 2600
+MAX_PROTEIN_SEQ_LEN = 1000
 MAX_PROTEIN_ANGLE = 3600
 MAX_PROTEIN_COORD = 10000
 TOTAL_STRUCTURAL_VARS = 54
@@ -54,7 +54,7 @@ class DataLoader:
             self.data = scn.load("debug", scn_dataset=True, scn_dir=scn_dir)
 
         # defining vocab
-        with open("amino_acid_info.json", "r") as f:
+        with open(f"{BASE_DIR}/amino_acid_info.json", "r") as f:
             self.aa_data = json.load(f)
 
         unique_aas = [i["code"] for i in self.aa_data.values()]
@@ -71,6 +71,9 @@ class DataLoader:
 
         self.pad_angle_idx = MAX_PROTEIN_ANGLE
         self.mask_angle_idx = MAX_PROTEIN_ANGLE + 1
+
+    def trim_data(self) -> None:
+        self.data = [prot for prot in self.data if len(prot) <= MAX_PROTEIN_SEQ_LEN]
 
     def encode(self, smi_str: str) -> list:
         return torch.tensor([self.char_to_ix[char] for char in smi_str])
@@ -202,6 +205,8 @@ class DataLoader:
         batch_size,
         masking_percent=DEFAULT_MASKING_PERCENT,
     ) -> GeneratorExit:
+
+        self.trim_data()
 
         total_batches = len(self.data) // batch_size
         for curr_batch in range(total_batches):
@@ -383,7 +388,7 @@ class Cermit(GPT):
             curr_time = datetime.now().strftime("%m_%d_%Y_T_%H_%M_%S")
             self.model_name += f"_{curr_time}"
 
-        self.model_dir = f"saved_models/{self.model_name}"
+        self.model_dir = f"{BASE_DIR}/saved_models/{self.model_name}"
 
         if os.path.isdir(self.model_dir):
             # to clear the existing
