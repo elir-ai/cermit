@@ -114,7 +114,7 @@ class DataLoader:
         Returns:
             torch.tensor: pairwise distance
         """
-        c_alpha_coords = torch.tensor(coords[1::14], device=self.device, dtype=torch.float16)
+        c_alpha_coords = torch.tensor(coords[1::14], device=self.device, dtype=torch.float32)
         diff = c_alpha_coords[:, None, :] - c_alpha_coords[None, :, :]
         pairwise_dist = torch.sqrt(torch.sum(diff**2, axis=-1))
         pairwise_dist_padded = torch.empty(
@@ -225,7 +225,7 @@ class DataLoader:
                     torch.tensor(
                         [self.char_to_ix[i] for i in seq.seq],
                         device=self.device,
-                        dtype=torch.int,
+                        dtype=torch.long,
                     )
                 )
                 # take the backbone torsion and bond angles (first 6 angles)
@@ -281,11 +281,12 @@ class Cermit(GPT):
             emb_size=emb_size,
             block_size=MAX_PROTEIN_SEQ_LEN,
             vocab_size=self.data_loader.vocab_size,
+            pad_token_id=self.data_loader.pad_seq_idx,
             dropout=dropout,
         )
         # In a tenth of a degrees
         self.angle_emb_table = nn.Embedding(
-            self.data_loader.mask_angle_idx + 1, emb_size
+            self.data_loader.mask_angle_idx + 1, emb_size, padding_idx=self.data_loader.pad_angle_idx
         )
 
     def forward(self, x: dict, calc_loss=True) -> torch.tensor:
@@ -300,14 +301,20 @@ class Cermit(GPT):
         """
         # Embed AA sequence and angles.
         # B, T, emb_size
+        
         seq_embedded = self.semantic_embedding_table(x["seq_masked"])
+        
+        position_mask = torch.arange(1, seq_embedded.shape[1]+1).broadcast_to(seq_embedded.shape[0], MAX_PROTEIN_SEQ_LEN).clone().detach()
+        pos_embedded = self.positional_emb_table(
+            position_mask.masked_fill_(x["seq_masked"] == 0, 0)
+        )
 
         angles_embedded = self.angle_emb_table(x["angles_masked"]).sum(
             -2
         )  # Sum embeddings for all angles
 
         out, _ = self.attention_layers(
-            (seq_embedded + angles_embedded, x["padding_mask"])
+            (seq_embedded + pos_embedded + angles_embedded, x["padding_mask"])
         )
         out = self.ln_f(out)  # B, T, emb_size
         logits = self.linear_layer(out)  # B, T, vocab_size
@@ -315,7 +322,7 @@ class Cermit(GPT):
         B = logits.shape[0]
 
         loss = torch.zeros(1, device=self.data_loader.device)
-
+        acc = 0
         # calculate loss
         if calc_loss:
             loss_func = nn.CrossEntropyLoss()
@@ -328,9 +335,18 @@ class Cermit(GPT):
                     logits[batch_idx, masked_idx],
                     x["seq_data"][batch_idx, masked_idx],
                 )
-            loss /= B
 
-        return logits, loss
+                # calc accuracy
+                curr_preds = logits[batch_idx, masked_idx].clone().detach()
+                curr_true = x["seq_data"][batch_idx, masked_idx].clone().detach()
+                y_pred_labels = torch.argmax(curr_preds, dim=1)
+                correct = (y_pred_labels == curr_true).sum().item()
+                acc += correct / len(curr_true)
+
+            loss /= B
+            acc /= B
+
+        return logits, loss, acc
 
     def train_model(
         self,
@@ -338,13 +354,14 @@ class Cermit(GPT):
         num_epochs: int,
         checkpoint_itvl=10,
         lr=3e-4,
+        weight_decay=1e-3,
         save_model=False,
     ):
         if save_model:
             self.config_model_dir()
 
         self.train()
-        opt = torch.optim.AdamW(self.parameters(), lr=lr)
+        opt = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
 
         for epoch in range(num_epochs):
             batch_step = 0
@@ -362,7 +379,7 @@ class Cermit(GPT):
 
                     batch_step += 1
                     # get logits and loss
-                    _, loss = self(batch_data)
+                    _, loss, acc = self(batch_data)
 
                     opt.zero_grad(set_to_none=True)
                     loss.backward()
@@ -370,7 +387,7 @@ class Cermit(GPT):
                     torch.nn.utils.clip_grad_norm_(self.parameters(), 5)
 
                     opt.step()
-                    tepoch.set_postfix(loss=loss.item(), val_loss=0)
+                    tepoch.set_postfix(loss=loss.item(), accuracy=acc, val_loss=0)
 
             # Save model
             if save_model:

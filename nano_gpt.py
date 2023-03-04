@@ -27,7 +27,7 @@ class FeedFowardLayer(nn.Module):
         self.emb_size = emb_size
         self.feed_foward = nn.Sequential(
             nn.Linear(self.emb_size, self.emb_size * scaling_factor),
-            nn.GeLU(),
+            nn.GELU(),
             nn.Linear(self.emb_size * scaling_factor, self.emb_size),
             nn.Dropout(dropout),
         )
@@ -69,13 +69,6 @@ class ScaledAttention(nn.Module):
         self.l_key = nn.Linear(emb_size, head_size, bias=False)
         self.l_query = nn.Linear(emb_size, head_size, bias=False)
         self.l_value = nn.Linear(emb_size, head_size, bias=False)
-
-        self.register_buffer(
-            "tril",
-            torch.tril(
-                torch.ones(block_size, block_size, dtype=torch.float32)
-            ),
-        )
         self.dropout = nn.Dropout(dropout)
 
     def forward(
@@ -96,9 +89,15 @@ class ScaledAttention(nn.Module):
         # Produce weights
         wei = Q @ K.transpose(-2, -1) * C**-0.5  # B, T, T
         # copy padded from B, T -> B, T, T
-        padding_mask_ = padding_mask.view(B, 1, T).expand(B, T, T)
-        wei = wei.masked_fill(padding_mask_, float("-inf"))
-        wei = wei.softmax(-1)  # B, T, T
+
+        wei = wei.masked_fill(
+            padding_mask.view(B, 1, T).expand(B, T, T), float("-inf")
+        ).softmax(
+            -1
+        )  # B, T, T
+
+        # setting remaining padding to 0
+        wei = wei.masked_fill(padding_mask.view(B, T, 1).expand(B, T, T), 0.0)
         wei = self.dropout(wei)
         out = wei @ V  # B, T, head_size
 
@@ -220,6 +219,7 @@ class GPT(nn.Module, metaclass=ABCMeta):
         emb_size: int,
         block_size: int,
         vocab_size: int,
+        pad_token_id: int,
         dropout=DEFAULT_DROPOUT_RATE,
     ) -> None:
         """GPT Module
@@ -238,10 +238,10 @@ class GPT(nn.Module, metaclass=ABCMeta):
         super().__init__()
         self.block_size = block_size
         self.semantic_embedding_table = nn.Embedding(
-            vocab_size, emb_size, dtype=torch.float32
+            vocab_size, emb_size, dtype=torch.float32, padding_idx=pad_token_id
         )
         self.positional_emb_table = nn.Embedding(
-            self.block_size, emb_size, dtype=torch.float32
+            self.block_size + 1, emb_size, dtype=torch.float32, padding_idx=0
         )
         self.attention_layers = nn.Sequential(
             *[
