@@ -304,7 +304,10 @@ class Cermit(GPT):
         
         seq_embedded = self.semantic_embedding_table(x["seq_masked"])
         
-        position_mask = torch.arange(1, seq_embedded.shape[1]+1).broadcast_to(seq_embedded.shape[0], MAX_PROTEIN_SEQ_LEN).clone().detach()
+        position_mask = torch.arange(
+            1, seq_embedded.shape[1]+1, device=self.data_loader.device
+        ).broadcast_to(seq_embedded.shape[0], MAX_PROTEIN_SEQ_LEN).clone().detach()
+        
         pos_embedded = self.positional_emb_table(
             position_mask.masked_fill_(x["seq_masked"] == 0, 0)
         )
