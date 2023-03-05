@@ -6,3 +6,4 @@ __pycache__/
 troubleshoot.ipynb
 .DS_Store
 sidechainnet_data/
+runs/

@@ -2,12 +2,15 @@ import os
 import shutil
 import json
 import math
+import random
 from datetime import datetime
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import torch
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
+
 import sidechainnet as scn
 from nano_gpt import GPT
 
@@ -205,9 +208,26 @@ class DataLoader:
         self,
         batch_size,
         masking_percent=DEFAULT_MASKING_PERCENT,
+        use_split="train",
+        **kwargs
     ) -> GeneratorExit:
 
         self.trim_data()
+
+        split_idx = int(kwargs.get("split_ratio", 0.8) * len(self.data))
+        
+        if use_split == "train":
+            curr_data = self.data[: split_idx]
+
+        # Test data
+        else:
+            curr_data = self.data[split_idx :]
+        
+        print(len(curr_data))
+
+        # shuffle the data
+        if kwargs.get("shuffle", True):
+            random.shuffle(curr_data)
 
         total_batches = len(self.data) // batch_size
         for curr_batch in range(total_batches):
@@ -359,9 +379,31 @@ class Cermit(GPT):
         lr=3e-4,
         weight_decay=1e-3,
         save_model=False,
+        **kwargs,
     ):
+        """
+        Train model function
+        Args:
+            batch_size (int): Batch size.
+            num_epochs (int): num epochs
+            checkpoint_itvl (int): Checkpoint interval. Defaults to 10.
+            lr (float): Learning rate. Defaults to 3e-4.
+            weight_decay (float): Weight decay. Defaults to 1e-3.
+            save_model (bool): Save model. Defaults to False.
+
+        Kwargs:
+            experiment_name (str): Name of the experiment. Defaults to self.model_name
+
+        Returns:
+            (None | torch.tensor): Loss if original values are given.
+
+        """
         if save_model:
             self.config_model_dir()
+        
+        # Initialize tensorboard writer
+        experiment_dir = f"{BASE_DIR}/runs/" + kwargs.get("experiment_name", self.model_name)
+        writer = SummaryWriter(experiment_dir)
 
         self.train()
         opt = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
@@ -391,6 +433,11 @@ class Cermit(GPT):
 
                     opt.step()
                     tepoch.set_postfix(loss=loss.item(), accuracy=acc, val_loss=0)
+                    writer.add_scalar('Loss/mini-batch', loss.item(), batch_step)
+                    writer.add_scalar('Acc/mini-batch', acc, batch_step)
+
+            writer.add_scalar('Loss/epoch', loss.item(), epoch)
+            writer.add_scalar('Acc/epoch', acc, epoch)
 
             # Save model
             if save_model:
