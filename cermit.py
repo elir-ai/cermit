@@ -373,12 +373,13 @@ class Cermit(GPT):
                     x["seq_data"][batch_idx, masked_idx],
                 )
 
-                # calc accuracy
-                curr_preds = logits[batch_idx, masked_idx].clone().detach()
-                curr_true = x["seq_data"][batch_idx, masked_idx].clone().detach()
-                y_pred_labels = torch.argmax(curr_preds, dim=1)
-                correct = (y_pred_labels == curr_true).sum().item()
-                acc += correct / len(curr_true)
+                with torch.no_grad():
+                    # calc accuracy
+                    curr_preds = logits[batch_idx, masked_idx].clone().detach()
+                    curr_true = x["seq_data"][batch_idx, masked_idx].clone().detach()
+                    y_pred_labels = torch.argmax(curr_preds, dim=1)
+                    correct = (y_pred_labels == curr_true).sum().item()
+                    acc += correct / len(curr_true)
 
             loss /= B
             acc /= B
@@ -459,15 +460,16 @@ class Cermit(GPT):
 
             # Save model        
             if epoch % checkpoint_itvl == 0:
-                # Get validation loss & accuracy
-                val_data_gen = self.data_loader.generate_batch(
-                    batch_size=batch_size, use_split='test'
-                )
-                val_data = next(val_data_gen)
-                _, val_loss, val_acc = self(val_data)
-                print(f"val_loss={val_loss.item()}, val_acc={val_acc}")
-                writer.add_scalar('Val Loss/mini-batch', loss.item(), batch_step)
-                writer.add_scalar('Val Acc/mini-batch', acc, batch_step)
+                with torch.no_grad():
+                    # Get validation loss & accuracy
+                    val_data_gen = self.data_loader.generate_batch(
+                        batch_size=batch_size, use_split='test'
+                    )
+                    val_data = next(val_data_gen)
+                    _, val_loss, val_acc = self(val_data)
+                    print(f"val_loss={val_loss.item()}, val_acc={val_acc}")
+                    writer.add_scalar('Val Loss/mini-batch', loss.item(), batch_step)
+                    writer.add_scalar('Val Acc/mini-batch', acc, batch_step)
                 if save_model:
                     self.save_model(epoch=epoch)
 
