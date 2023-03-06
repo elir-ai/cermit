@@ -408,6 +408,7 @@ class Cermit(GPT):
 
         Kwargs:
             experiment_name (str): Name of the experiment. Defaults to self.model_name
+            run_validation (bool): Whether to run validation after every checkpoint itvl or not. Defaults to False
 
         Returns:
             (None | torch.tensor): Loss if original values are given.
@@ -460,16 +461,17 @@ class Cermit(GPT):
 
             # Save model        
             if epoch % checkpoint_itvl == 0:
-                with torch.no_grad():
-                    # Get validation loss & accuracy
-                    val_data_gen = self.data_loader.generate_batch(
-                        batch_size=batch_size, use_split='test'
-                    )
-                    val_data = next(val_data_gen)
-                    _, val_loss, val_acc = self(val_data)
-                    print(f"val_loss={val_loss.item()}, val_acc={val_acc}")
-                    writer.add_scalar('Val Loss/mini-batch', loss.item(), batch_step)
-                    writer.add_scalar('Val Acc/mini-batch', acc, batch_step)
+                if kwargs.get("run_validation", False):
+                    with torch.no_grad():
+                        # Get validation loss & accuracy
+                        val_data_gen = self.data_loader.generate_batch(
+                            batch_size=batch_size, use_split='test'
+                        )
+                        val_data = next(val_data_gen)
+                        _, val_loss, val_acc = self(val_data)
+                        print(f"val_loss={val_loss.item()}, val_acc={val_acc}")
+                        writer.add_scalar('Val Loss/mini-batch', loss.item(), batch_step)
+                        writer.add_scalar('Val Acc/mini-batch', acc, batch_step)
                 if save_model:
                     self.save_model(epoch=epoch)
 
