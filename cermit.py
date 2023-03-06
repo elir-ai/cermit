@@ -206,15 +206,30 @@ class DataLoader:
 
     def generate_batch(
         self,
-        batch_size,
+        batch_size: int,
         masking_percent=DEFAULT_MASKING_PERCENT,
         use_split="train",
         **kwargs
     ) -> GeneratorExit:
+        """Generates a batch of data
+
+        Args:
+            batch_size (int): Batch size for data generator. 
+                (Batch size is set to data size for test data)
+            masking_percent (float): Masking Percent for MLM. Defaults to DEFAULT_MASKING_PERCENT.
+            use_split (str): Which split to use (train/test). Defaults to "train".
+
+        Kwargs:
+            split_ratio (float): Split ratio for train/test split. Defaults to DEFAULT_TRAIN_SPLIT.
+            shuffle (bool): Whether to shuffle the data. Defaults to True.
+
+        Yields:
+            GeneratorExit: Yeilds a batch of data
+        """
 
         self.trim_data()
 
-        split_idx = int(kwargs.get("split_ratio", 0.8) * len(self.data))
+        split_idx = int(kwargs.get("split_ratio", DEFAULT_TRAIN_SPLIT) * len(self.data))
         
         if use_split == "train":
             curr_data = self.data[: split_idx]
@@ -222,16 +237,15 @@ class DataLoader:
         # Test data
         else:
             curr_data = self.data[split_idx :]
+            batch_size = len(curr_data)
         
-        print(len(curr_data))
-
         # shuffle the data
         if kwargs.get("shuffle", True):
             random.shuffle(curr_data)
 
-        total_batches = len(self.data) // batch_size
+        total_batches = len(curr_data) // batch_size
         for curr_batch in range(total_batches):
-            batch_items = self.data[curr_batch : curr_batch + batch_size]
+            batch_items = curr_data[curr_batch : curr_batch + batch_size]
 
             # Store all info in the batch_data dict
             batch_data = {
@@ -309,7 +323,7 @@ class Cermit(GPT):
             self.data_loader.mask_angle_idx + 1, emb_size, padding_idx=self.data_loader.pad_angle_idx
         )
 
-    def forward(self, x: dict, calc_loss=True) -> torch.tensor:
+    def forward(self, x: dict, calc_loss=True) -> tuple:
         """Forward function for cermit
 
         Args:
@@ -317,7 +331,7 @@ class Cermit(GPT):
             calc_loss (bool): Should you calc loss
 
         Returns:
-            (None | torch.tensor): Loss if original values are given.
+            (torch.tensor, torch.tensor, int): Logits, Loss, Accuracy.
         """
         # Embed AA sequence and angles.
         # B, T, emb_size
@@ -408,9 +422,9 @@ class Cermit(GPT):
         self.train()
         opt = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
 
-        for epoch in range(num_epochs):
+        for epoch in range(1, num_epochs + 1):
             batch_step = 0
-            total_batches = len(self.data_loader.data) // batch_size
+            total_batches = int(DEFAULT_TRAIN_SPLIT * len(self.data_loader.data)) // batch_size
             data_generator = self.data_loader.generate_batch(
                 batch_size=batch_size
             )
@@ -432,16 +446,29 @@ class Cermit(GPT):
                     torch.nn.utils.clip_grad_norm_(self.parameters(), 5)
 
                     opt.step()
-                    tepoch.set_postfix(loss=loss.item(), accuracy=acc, val_loss=0)
-                    writer.add_scalar('Loss/mini-batch', loss.item(), batch_step)
-                    writer.add_scalar('Acc/mini-batch', acc, batch_step)
+                    
+                    scalar_loss = loss.item()
+                    tepoch.set_postfix(loss=scalar_loss, accuracy=acc, val_loss=0, val_acc=0)
+                    
+                    mini_batch_step = ((epoch-1) * total_batches) + batch_step
+                    writer.add_scalar('Loss/mini-batch', scalar_loss, mini_batch_step)
+                    writer.add_scalar('Acc/mini-batch', acc, mini_batch_step)
 
-            writer.add_scalar('Loss/epoch', loss.item(), epoch)
+            writer.add_scalar('Loss/epoch', scalar_loss, epoch)
             writer.add_scalar('Acc/epoch', acc, epoch)
 
-            # Save model
-            if save_model:
-                if epoch % checkpoint_itvl == 0:
+            # Save model        
+            if epoch % checkpoint_itvl == 0:
+                # Get validation loss & accuracy
+                val_data_gen = self.data_loader.generate_batch(
+                    batch_size=batch_size, use_split='test'
+                )
+                val_data = next(val_data_gen)
+                _, val_loss, val_acc = self(val_data)
+                print(f"val_loss={val_loss.item()}, val_acc={val_acc}")
+                writer.add_scalar('Val Loss/mini-batch', loss.item(), batch_step)
+                writer.add_scalar('Val Acc/mini-batch', acc, batch_step)
+                if save_model:
                     self.save_model(epoch=epoch)
 
     def config_model_dir(
