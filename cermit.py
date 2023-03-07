@@ -237,7 +237,7 @@ class DataLoader:
         # Test data
         else:
             curr_data = self.data[split_idx :]
-        
+
         # shuffle the data
         if kwargs.get("shuffle", True):
             random.shuffle(curr_data)
@@ -413,12 +413,13 @@ class Cermit(GPT):
             (None | torch.tensor): Loss if original values are given.
 
         """
-        if save_model:
-            self.config_model_dir()
-        
         # Initialize tensorboard writer
-        experiment_dir = f"{BASE_DIR}/runs/" + kwargs.get("experiment_name", self.model_name)
-        writer = SummaryWriter(experiment_dir)
+        experiment_name = kwargs.get("experiment_name", self.model_name)
+        tb_dir = f"{BASE_DIR}/runs/" + experiment_name
+        writer = SummaryWriter(tb_dir)
+
+        if save_model:
+            self.config_model_dir(experiment_name=experiment_name)
 
         self.train()
         opt = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
@@ -463,31 +464,32 @@ class Cermit(GPT):
             if epoch % checkpoint_itvl == 0:
                 if kwargs.get("run_validation", False):
                     with torch.no_grad():
+                        self.eval()
                         # Get validation loss & accuracy
                         val_data_gen = self.data_loader.generate_batch(
                             batch_size=batch_size, use_split='test'
                         )
                         val_data = next(val_data_gen)
                         _, val_loss, val_acc = self(val_data)
-                        print(f"val_loss={val_loss.item()}, val_acc={val_acc}")
-                        writer.add_scalar('Val Loss/mini-batch', loss.item(), batch_step)
-                        writer.add_scalar('Val Acc/mini-batch', acc, batch_step)
+                        writer.add_scalar('Val Loss/mini-batch', val_loss.item(), batch_step)
+                        writer.add_scalar('Val Acc/mini-batch', val_acc, batch_step)
+                        self.train()
                 if save_model:
-                    self.save_model(epoch=epoch)
+                    self.save_model(epoch=epoch, experiment_name=experiment_name)
 
     def config_model_dir(
-        self,
+        self, experiment_name: str
     ) -> None:
         """Config model dir. To be run once per train
 
         Args:
-            model_name (str): Model Name. Defaults to "cermit".
+            experiment_name (str): Experiment Name.
         """
-        if self.model_name == "cermit":
-            curr_time = datetime.now().strftime("%m_%d_%Y_T_%H_%M_%S")
-            self.model_name += f"_{curr_time}"
 
-        self.model_dir = f"{BASE_DIR}/saved_models/{self.model_name}"
+        curr_time = datetime.now().strftime("%m_%d_%Y_T_%H_%M_%S")
+        experiment_name = f"{experiment_name}_{curr_time}"
+
+        self.model_dir = f"{BASE_DIR}/saved_models/{experiment_name}"
 
         if os.path.isdir(self.model_dir):
             # to clear the existing
@@ -511,7 +513,7 @@ class Cermit(GPT):
             checkpoint["state_dict"] = self.state_dict()
             torch.save(
                 checkpoint,
-                f"{self.model_dir}/{self.model_name}_epoch_{epoch}.pth",
+                f"{self.model_dir}/_epoch_{epoch}.pth",
             )
 
             print("Model saved successfully!")
