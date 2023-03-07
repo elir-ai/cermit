@@ -237,7 +237,6 @@ class DataLoader:
         # Test data
         else:
             curr_data = self.data[split_idx :]
-            batch_size = len(curr_data)
         
         # shuffle the data
         if kwargs.get("shuffle", True):
