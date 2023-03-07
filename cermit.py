@@ -428,7 +428,7 @@ class Cermit(GPT):
             batch_step = 0
             total_batches = int(DEFAULT_TRAIN_SPLIT * len(self.data_loader.data)) // batch_size
             data_generator = self.data_loader.generate_batch(
-                batch_size=batch_size
+                batch_size=batch_size, shuffle=kwargs.get("shuffle", True)
             )
             with tqdm(
                 data_generator,
@@ -450,7 +450,8 @@ class Cermit(GPT):
                     opt.step()
                     
                     scalar_loss = loss.item()
-                    tepoch.set_postfix(loss=scalar_loss, accuracy=acc, val_loss=0, val_acc=0)
+                    if batch_step % 50 == 0:
+                        tepoch.set_postfix(loss=scalar_loss, accuracy=acc, val_loss=0, val_acc=0)
                     
                     mini_batch_step = ((epoch-1) * total_batches) + batch_step
                     writer.add_scalar('Loss/mini-batch', scalar_loss, mini_batch_step)
