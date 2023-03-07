@@ -475,7 +475,7 @@ class Cermit(GPT):
                         writer.add_scalar('Val Acc/mini-batch', val_acc, batch_step)
                         self.train()
                 if save_model:
-                    self.save_model(epoch=epoch, experiment_name=experiment_name)
+                    self.save_model(epoch=epoch)
 
     def config_model_dir(
         self, experiment_name: str
