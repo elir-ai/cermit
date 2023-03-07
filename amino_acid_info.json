@@ -1,0 +1,82 @@
+{
+    "VAL": {
+        "idx": 1,
+        "code": "V"
+    },
+    "ILE": {
+        "idx": 2,
+        "code": "I"
+    },
+    "LEU": {
+        "idx": 3,
+        "code": "L"
+    },
+    "GLU": {
+        "idx": 4,
+        "code": "E"
+    },
+    "GLN": {
+        "idx": 5,
+        "code": "Q"
+    },
+    "ASP": {
+        "idx": 6,
+        "code": "D"
+    },
+    "ASN": {
+        "idx": 7,
+        "code": "N"
+    },
+    "HIS": {
+        "idx": 8,
+        "code": "H"
+    },
+    "TRP": {
+        "idx": 9,
+        "code": "W"
+    },
+    "PHE": {
+        "idx": 10,
+        "code": "F"
+    },
+    "TYR": {
+        "idx": 11,
+        "code": "Y"
+    },
+    "ARG": {
+        "idx": 12,
+        "code": "R"
+    },
+    "LYS": {
+        "idx": 13,
+        "code": "K"
+    },
+    "SER": {
+        "idx": 14,
+        "code": "S"
+    },
+    "THR": {
+        "idx": 15,
+        "code": "T"
+    },
+    "MET": {
+        "idx": 16,
+        "code": "M"
+    },
+    "ALA": {
+        "idx": 17,
+        "code": "A"
+    },
+    "GLY": {
+        "idx": 18,
+        "code": "G"
+    },
+    "PRO": {
+        "idx": 19,
+        "code": "P"
+    },
+    "CYS": {
+        "idx": 20,
+        "code": "C"
+    }
+}

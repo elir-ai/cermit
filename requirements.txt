@@ -1,0 +1,7 @@
+numpy==1.23.5
+pandas==1.5.3
+tqdm==4.64.1
+pytorch>=1.13.1
+tensorboard==2.10.0
+torch-tb-profiler==0.4.1
+sidechainnet==0.7.6
